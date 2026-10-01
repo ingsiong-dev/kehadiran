@@ -171,6 +171,16 @@
      3. The dead token's email is read BEFORE the token is deleted - that address
         is the login_hint that makes silent re-login work on a multi-account
         phone, and it is the only thing that makes it work.
+
+   v2.40 adds the DURABLE KEY ("sesi kekal", log masuk sekali sahaja) - the same
+   mechanism the portal and the e-RPH app use. The BACKEND mints `sesi_<32 hex>` once
+   from a verified Google sign-in, and from then on this page hands THAT to the app
+   instead of a 1-hour Google token. Two consequences before you edit this file:
+     - the key is preferred OVER a still-valid Google token (__boot step 4), because
+       a 1-hour token is exactly what killed the app mid-session before;
+     - every path that clears the token must clear the key too, or the next load
+       signs the same refused teacher straight back in. "Tukar akaun" and
+       ?logkeluar=1 both do.
    ========================================================================== */
 var APP = {
   exec: 'https://script.google.com/macros/s/AKfycbwL7xyYOZmCL-KkCIee_k-fYl-k4DUZXq5FEHklz8qWFppBGtazTbi126LjiFRKHrj-6w/exec',
@@ -184,7 +194,7 @@ var APP = {
      failure text looks identical - this stamp is the only way to tell which build
      a device actually has. BUMP IT (k<major>.<minor>-<date>) ON EVERY EDIT, or it
      stops identifying anything. */
-  build: 'k1.9-2026-10-01',
+  build: 'k2.0-2026-10-01',
   token: null
 };
 
@@ -249,6 +259,15 @@ function __tokenUsable(t) {
   var c = __decodeJwt(t);
   return !!c && (!c.exp || c.exp * 1000 > Date.now() + 30000);
 }
+
+/* The backend's OWN key ("sesi_" + 32 hex), minted once from a verified Google
+   sign-in and valid for ever. Recognised by SHAPE here so the gate knows which
+   credential it is holding: a Google token has a 1-hour life and can be checked
+   locally, a session key has no claims at all and is only ever judged by the
+   server. Never send a session key to Google, and never mint one from a session
+   key - the server refuses both, and this is where that is respected. */
+var SESI_RE = /^sesi_[0-9a-f]{32}$/;
+function __adalahSesi(t) { return SESI_RE.test(String(t || '').toLowerCase()); }
 
 function __setStatus(msg, busy) {
   var el = $('g-status');
@@ -328,24 +347,116 @@ function __startApp(token) {
    sharing them across tabs would break a parallel sign-in. */
 function __accept(token) {
   APP.token = token;
-  __lsSet('kehadiran-token', token);
+  if (__adalahSesi(token)) {
+    __lsSet('kehadiran-sesi', token);
+  } else {
+    __lsSet('kehadiran-token', token);
+    /* Remember WHO signed in (the claims are readable from a Google token, and a
+       session key has none) so a later silent hop can name the account - that
+       address as login_hint is the only thing that picks the right account on a
+       phone with several Google accounts signed in. */
+    var c0 = __decodeJwt(token);
+    if (c0 && c0.email) __lsSet('kehadiran-emel', c0.email);
+  }
   __setStatus('Verifying account\u2026', true);
 
   __verify(token).then(function (res) {
-    if (res && res.ok) { __startApp(token); return; }
+    if (res && res.ok) {
+      __startApp(token);
+      /* Upgrade to the durable key in the BACKGROUND: it must never delay or block
+         the sign-in that just worked, and it takes effect from the NEXT load. A
+         session key cannot mint one (the server refuses), so this is a no-op then. */
+      __mintSesi(token);
+      return;
+    }
     var code = (res && res.code) || 'E_LAIN';
     if (code === 'E_ROSTER') { __lupakanAkaunDitolak_(token); __showDenied(String((res && res.error) || '')); return; }
     if (code === 'E_TOKEN' || code === 'E_LOGIN') {
-      __lsDel('kehadiran-token'); APP.token = null;
+      /* A refused DURABLE KEY is not the ordinary expiry: the key was accepted
+         before, so this device proved it signed in. Clear it and ask Google for a
+         fresh sign-in with no screen - the teacher should never see this. */
+      var adalahKunci = __adalahSesi(token);
+      __lupakanAkaunDitolak_(token);
+      if (adalahKunci) {
+        __showGate('Your sign-in session has expired. Signing you in again\u2026');
+        if (__trySilent(__lsGet('kehadiran-emel'))) return;
+      }
       __showGate('Your sign-in session has expired. Tap the button to sign in again.');
       return;
     }
     /* Anything else (a quota trip, a missing permission, a bad request) is NOT a
-       login problem - keep the token so a retry can succeed. */
+       login problem - keep the credential so a retry can succeed. */
     __showError('Pelayan tidak dapat mengesahkan log masuk: ' + ((res && res.error) || code));
   }, function (e) {
     __showError('Tidak dapat menghubungi pelayan. Cuba muat semula halaman. (' + e + ')');
   });
+}
+
+/* ---- SESI KEKAL ("log masuk sekali sahaja") --------------------------------
+   The 1-hour Google ID token is why a teacher had to be signed in again and again:
+   mid-session every call started failing on expiry, and after the browser was
+   closed the gate could only ask Google silently (prompt=none), which needs a live
+   Google session in that browser. So the BACKEND mints its own key instead -
+   "sesi_" + 32 hex characters, NO EXPIRY, kept in Script Properties under Code.js
+   "SESI KEKAL" - and this page keeps it in localStorage. One sign-in, then never
+   again: __boot() uses that key directly and Google is never contacted.
+
+   The key is a bearer credential for that teacher's own view, which is why
+   ?logkeluar=1 exists (see __logKeluar) and why a REFUSED account drops it. */
+function __warn(mesej, butiran) {
+  try {
+    if (typeof console !== 'undefined' && console && console.warn) console.warn(mesej, butiran);
+  } catch (e) {}
+}
+
+function __mintSesi(token) {
+  if (!token || __adalahSesi(token)) return;    // a session key cannot mint one
+  /* ONE key per browser. Without this, every load that still carried a live 1-hour
+     token would mint ANOTHER property, and a teacher who reloads all morning would
+     fill Script Properties with keys nobody will ever use. */
+  var ada = __lsGet('kehadiran-sesi');
+  if (ada && __adalahSesi(ada)) return;
+  try {
+    fetch(APP.exec, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ action: 'sesi', token: token })
+    }).then(function (r) { return r.json(); }).then(function (res) {
+      /* A shape check, not a truthy one: an older deployment answers {ok:true} with
+         no key at all, and storing that would break the next load. */
+      if (res && res.sesi && SESI_RE.test(String(res.sesi).toLowerCase())) {
+        __lsSet('kehadiran-sesi', res.sesi);
+        if (res.email) __lsSet('kehadiran-emel', res.email);
+      } else if (res && res.code) {
+        __warn('Kehadiran: kunci sesi kekal tidak diterima; token 1 jam digunakan.', res.code);
+      }
+    }, function (e) {
+      __warn('Kehadiran: gagal mendapatkan kunci sesi kekal.', e);
+    });
+  } catch (e) {}
+}
+
+/* "Log keluar" for a shared computer (a staff-room PC, say). A plain link, so it
+   works with no UI change and no button to find:
+       https://ingsiong-dev.github.io/kehadiran/?logkeluar=1
+   The server-side key is deleted too - dropping only the browser's copy would leave
+   a usable credential behind. */
+function __logKeluar() {
+  var sesi = __lsGet('kehadiran-sesi');
+  if (sesi) {
+    try {
+      fetch(APP.exec, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({ action: 'logKeluar', token: sesi })
+      });
+    } catch (e) {}
+  }
+  __lsDel('kehadiran-sesi');
+  __lsDel('kehadiran-token');
+  __lsDel('kehadiran-emel');
+  try { history.replaceState(null, '', location.pathname); } catch (e) {}
+  __showGate('Anda telah log keluar. Ketik butang di atas untuk log masuk semula.');
 }
 
 /* A REFUSED account must NOT be remembered.
@@ -365,7 +476,19 @@ function __accept(token) {
    teacher's valid token sitting beside it must survive. */
 function __lupakanAkaunDitolak_(token) {
   __lsDel('kehadiran-token');
+  /* The DURABLE KEY goes too, and only when it is the credential that was refused:
+     leaving it behind would resume the same refused session on every visit, which is
+     the exact loop this function exists to break. */
+  if (__adalahSesi(token)) __lsDel('kehadiran-sesi');
   APP.token = null;
+  /* The shared GOOGLE tokens are dropped too, but ONLY when they are the SAME token:
+     every front end on this origin gates on the SAME DELIMA roster, so a token that
+     roster rejects is dead for all of them and clearing it cannot sign anyone out of
+     anything usable. Clearing only the identical value is what matters - a DIFFERENT
+     teacher's valid token sitting beside it must survive.
+     A session key from ANOTHER app (`erph-sesi`, `portal-sesi`) is never adopted and
+     never touched: those keys live in THAT backend's script properties, this script
+     has never heard of them, and sending one here would only produce a refusal. */
   ['portal-token', 'erph-token'].forEach(function (k) {
     if (__lsGet(k) === token) __lsDel(k);
   });
@@ -380,6 +503,10 @@ function __lupakanAkaunDitolak_(token) {
 function __trySilent(hint) {
   if (__ssGet('kehadiran-silent-done') === '1') return false;
   __ssSet('kehadiran-silent-done', '1');
+  /* A DURABLE KEY carries no claims, so the address has to come from what was
+     remembered at sign-in time - without it a multi-account phone silently signs in
+     the wrong teacher. */
+  if (!hint) hint = __lsGet('kehadiran-emel');
   __ssSet('kehadiran-silent', '1');
   location.replace(__authUrl({ prompt: 'none', loginHint: hint }));
   return true;
@@ -438,16 +565,24 @@ function __handleOAuthReturn() {
 }
 
 function __boot() {
-  /* 1. finish a returning sign-in. ALWAYS first: __wireGoogleButton() (at the
-        tail of this script) replaces the stored nonce/state, so handling the
-        return after it would reject the very login Google just completed. */
+  /* 1. "log keluar" on a shared computer. FIRST, because it must win over every
+        stored credential - including the durable key, which never expires. */
+  if (Q.get('logkeluar') === '1') { __logKeluar(); return; }
+
+  /* 2. finish a returning sign-in. ALWAYS before the button is wired:
+        __wireGoogleButton() (at the tail of this script) replaces the stored
+        nonce/state, so handling the return after it would reject the very login
+        Google just completed. */
   if (__handleOAuthReturn()) return;
 
-  /* 2. "Tukar akaun Google": forget the stored token and ALWAYS show the chooser.
-        Without the silent-done flag the next step would be a prompt=none hop that
-        silently signs the same wrong account back in. */
+  /* 3. "Tukar akaun Google": forget EVERY stored credential - the durable key
+        included, or this step would be undone by it two lines later - and always
+        show the chooser. Without the silent-done flag the next step would be a
+        prompt=none hop that silently signs the same wrong account back in. */
   if (Q.get('switch') === '1') {
     __lsDel('kehadiran-token');
+    __lsDel('kehadiran-sesi');
+    __lsDel('kehadiran-emel');
     APP.token = null;
     __ssSet('kehadiran-silent-done', '1');
     __setStatus('Choose your @moe-dl.edu.my account.');
@@ -455,9 +590,26 @@ function __boot() {
   }
 
   var t = __lsGet('kehadiran-token');
-  if (t && __tokenUsable(t)) { __accept(t); return; }   // 3. still signed in
 
-  /* 4. the device signed in before, so ask Google silently for a new token.
+  /* 4. THE "LOGIN ONCE, FOREVER" PATH, and it comes BEFORE the 1-hour token on
+        purpose. A key from the backend has no expiry, so handing it to the app is
+        what stops the app dying mid-session an hour after the load. It is NOT
+        verified here: the server is the authority, and if it refuses the key
+        __accept()'s failure branch clears it and asks Google silently. A pre-flight
+        check would only add a wait to every load. */
+  var sesi = __lsGet('kehadiran-sesi');
+  if (sesi && __adalahSesi(sesi)) {
+    /* A dead 1-hour token beside a live key has nothing left to be used for, and
+       leaving it would send the NEXT load down the silent-hop path instead. */
+    if (t) __lsDel('kehadiran-token');
+    __accept(sesi);
+    return;
+  }
+  if (sesi) __lsDel('kehadiran-sesi');   // corrupt value: never send it to the server
+
+  if (t && __tokenUsable(t)) { __accept(t); return; }   // 5. signed in, no key yet
+
+  /* 6. the device signed in before, so ask Google silently for a new token.
         Read the dead token's EMAIL first: that is the login_hint, and on a phone
         with several Google accounts it is the only thing that makes the silent
         hop land on the right one. */
@@ -469,19 +621,21 @@ function __boot() {
   }
   if (t) { __trySilent(hint); return; }
 
-  /* 5. never signed in on THIS browser - but the other apps on this origin are
-        the SAME Google client gating on the SAME roster, so a teacher who has
-        already signed in to the portal (or the e-RPH app) is let straight through.
-        Only consulted when this app has no token of its own, and the check itself
-        is what keeps that safe: the roster verdict cannot differ between them, so a
-        token adopted here can never be a "wrong account". */
+  /* 7. never signed in on THIS browser - but the other apps on this origin are the
+        SAME Google client gating on the SAME roster, so a teacher who has already
+        signed in to the portal (or the e-RPH app) is let straight through.
+        Only consulted when this app has no credential of its own, only GOOGLE tokens
+        are accepted (another app's session key belongs to another backend and would
+        be refused here), and the check itself is what keeps this safe: the roster
+        verdict cannot differ between them, so a token adopted here can never be a
+        "wrong account". */
   var sharedKeys = ['portal-token', 'erph-token'];
   for (var sk = 0; sk < sharedKeys.length; sk++) {
     var shared = __lsGet(sharedKeys[sk]);
-    if (shared && __tokenUsable(shared)) { __accept(shared); return; }
+    if (shared && !__adalahSesi(shared) && __tokenUsable(shared)) { __accept(shared); return; }
   }
 
-  /* 6. first visit: leave the gate up for a manual tap. */
+  /* 8. first visit: leave the gate up for a manual tap. */
   __setStatus('');
 }
 
