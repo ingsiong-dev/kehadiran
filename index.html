@@ -194,7 +194,7 @@ var APP = {
      failure text looks identical - this stamp is the only way to tell which build
      a device actually has. BUMP IT (k<major>.<minor>-<date>) ON EVERY EDIT, or it
      stops identifying anything. */
-  build: 'k2.0-2026-10-01',
+  build: 'k2.1-2026-10-01',
   token: null
 };
 
@@ -500,6 +500,11 @@ function __lupakanAkaunDitolak_(token) {
    it ONE-SHOT so a refusal can never become a redirect loop, and __ssGet(
    'kehadiran-silent') marks the in-flight attempt so a refusal shows the plain gate
    instead of accusing the teacher of cancelling something they never saw. */
+/* Set the moment __trySilent() hands the URL to Google. The tail of this script
+   must NOT re-wire the button after that, or the state/nonce it stored are
+   overwritten and the token Google returns fails its own check. */
+var __handedOff = false;
+
 function __trySilent(hint) {
   if (__ssGet('kehadiran-silent-done') === '1') return false;
   __ssSet('kehadiran-silent-done', '1');
@@ -508,7 +513,9 @@ function __trySilent(hint) {
      the wrong teacher. */
   if (!hint) hint = __lsGet('kehadiran-emel');
   __ssSet('kehadiran-silent', '1');
-  location.replace(__authUrl({ prompt: 'none', loginHint: hint }));
+  var u = __authUrl({ prompt: 'none', loginHint: hint });
+  __handedOff = true;
+  location.replace(u);
   return true;
 }
 
@@ -658,7 +665,12 @@ function __boot() {
    the nonce/state the PREVIOUS load stored; re-wiring the button first would
    overwrite them with fresh randoms and reject every real login. */
 __boot();
-__wireGoogleButton();
+/* ...and it must not be re-wired when __boot() already LEFT for Google. The silent
+   hop stores a state/nonce and sends the SAME url to Google; calling __authUrl()
+   again here would overwrite both with fresh randoms, so the token Google is about
+   to return would fail its own state check and the page would accuse the teacher of
+   a failed sign-in ("code S") that never happened. Reported 01 Oct 2026. */
+if (!__handedOff) __wireGoogleButton();
 </script>
 
 </body>
