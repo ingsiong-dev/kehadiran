@@ -55,9 +55,17 @@ then, in this folder, `git add index.html README.md ; git commit ; git push`
 The gate prints `versi k<major>.<minor>-<date>` at the bottom. GitHub Pages serves this HTML
 with `Cache-Control: max-age=600`, so a phone can be running a stale copy and the failure text
 looks identical - **bump the stamp on every edit**, or it stops identifying anything.
+Current: `k1.5-2026-10-01` (backend `v2.31`).
+
+**Language rule (01 Oct 2026, his request):** every RUNTIME message is English - the status
+line ("Loading the attendance system…", "Verifying account…", "Sign-in cancelled. Try again.")
+and the in-app notice. The designed card copy (headings, "Sebab" box, numbered steps) stays
+Malay, like the rest of the app. Same split in the app itself: system words English, report
+content Malay.
 
 ## Rollback
 
-`clasp update-deployment <deploymentId> -V 24` puts the ungated app back (its `doGet()` ignores
-the token, so the iframe URL this page builds still loads it - but then anyone with the plain
-link is inside again).
+`clasp update-deployment <deploymentId> -V 30` puts the previous version back (v2.30, before
+the name/PIN/English changes). `-V 24` goes all the way to the ungated app (its `doGet()`
+ignores the token, so the iframe URL this page builds still loads it - but then anyone with the
+plain link is inside again).

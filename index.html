@@ -135,7 +135,7 @@
 
 <!-- ============================== THE APP ============================== -->
 <div id="app">
-  <div id="boot"><div class="spinner"></div><div>Memuatkan sistem kehadiran&hellip;</div></div>
+  <div id="boot"><div class="spinner"></div><div>Loading the attendance system&hellip;</div></div>
   <iframe id="frame" title="Sistem Rekod Kehadiran" src="about:blank"
           allow="clipboard-write; camera; microphone; geolocation"></iframe>
 </div>
@@ -182,7 +182,7 @@ var APP = {
      failure text looks identical - this stamp is the only way to tell which build
      a device actually has. BUMP IT (k<major>.<minor>-<date>) ON EVERY EDIT, or it
      stops identifying anything. */
-  build: 'k1.4-2026-10-01',
+  build: 'k1.5-2026-10-01',
   token: null
 };
 
@@ -315,7 +315,7 @@ function __startApp(token) {
 function __accept(token) {
   APP.token = token;
   __lsSet('kehadiran-token', token);
-  __setStatus('Mengesahkan akaun\u2026', true);
+  __setStatus('Verifying account\u2026', true);
 
   __verify(token).then(function (res) {
     if (res && res.ok) { __startApp(token); return; }
@@ -323,7 +323,7 @@ function __accept(token) {
     if (code === 'E_ROSTER') { __lupakanAkaunDitolak_(token); __showDenied(String((res && res.error) || '')); return; }
     if (code === 'E_TOKEN' || code === 'E_LOGIN') {
       __lsDel('kehadiran-token'); APP.token = null;
-      __showGate('Sesi log masuk telah tamat. Ketik butang untuk log masuk semula.');
+      __showGate('Your sign-in session has expired. Tap the button to sign in again.');
       return;
     }
     /* Anything else (a quota trip, a missing permission, a bad request) is NOT a
@@ -396,7 +396,7 @@ function __handleOAuthReturn() {
     clearHash();
     /* A silent attempt is ALLOWED to fail - the gate is its fallback, so it must
        not tell the teacher they cancelled something they never saw. */
-    if (!wasSilent) __setStatus('Log masuk dibatalkan. Cuba lagi.');
+    if (!wasSilent) __setStatus('Sign-in cancelled. Try again.');
     return true;
   }
 
@@ -412,7 +412,7 @@ function __handleOAuthReturn() {
           : (wantNonce && claims.nonce !== wantNonce) ? 'N'
           : '';
   if (why) {
-    __setStatus('Pengesahan log masuk gagal (kod ' + why + '). Cuba lagi.');
+    __setStatus('Sign-in verification failed (code ' + why + '). Try again.');
     clearHash();
     return true;
   }
@@ -436,7 +436,7 @@ function __boot() {
     __lsDel('kehadiran-token');
     APP.token = null;
     __ssSet('kehadiran-silent-done', '1');
-    __setStatus('Pilih akaun @moe-dl.edu.my anda.');
+    __setStatus('Choose your @moe-dl.edu.my account.');
     return;
   }
 
