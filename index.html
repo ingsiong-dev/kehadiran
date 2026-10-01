@@ -184,7 +184,7 @@ var APP = {
      failure text looks identical - this stamp is the only way to tell which build
      a device actually has. BUMP IT (k<major>.<minor>-<date>) ON EVERY EDIT, or it
      stops identifying anything. */
-  build: 'k1.8-2026-10-01',
+  build: 'k1.9-2026-10-01',
   token: null
 };
 
@@ -255,6 +255,13 @@ function __setStatus(msg, busy) {
   if (!el) return;
   el.textContent = msg || '';
   el.className = 'status' + (busy ? ' busy' : '');
+  /* While the backend is being asked about the token, the sign-in button must NOT be
+     on screen (his request, 01 Oct 2026): there is nothing useful to tap, and the
+     same REAL LINK would start a SECOND sign-in on top of the one being checked -
+     on a phone that reads as the page being stuck. Every path that ends the wait
+     calls __setStatus() again without `busy`, so the button always comes back. */
+  var b = $('btn-google');
+  if (b) b.style.display = busy ? 'none' : '';
 }
 
 function __showGate(msg) {
@@ -263,7 +270,12 @@ function __showGate(msg) {
   $('card-error').style.display = 'none';
   $('gate').style.display = 'flex';
   $('app').style.display = 'none';
-  if (msg) __setStatus(msg);
+  /* ALWAYS through __setStatus, never "only when there is a message": this is the
+     one place the login card is put back on screen, and the verifying step takes the
+     button off it. Passing `false` for busy is what guarantees the button returns -
+     his rule: a check that PASSES goes straight into the app, and only one that
+     FAILS brings the login button back. */
+  __setStatus(msg || '', false);
 }
 
 function __showDenied(reason) {
