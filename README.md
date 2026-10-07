@@ -94,6 +94,12 @@ in the app itself: system words English, report content Malay.
 
 ## Rollback
 
+`clasp update-deployment <deploymentId> -V 68` puts back **v2.67**, before the Laporan
+class-name fix (07 Oct 2026): the card's document tile + three action buttons occupy
+120px, so at the old 134px column the name was left 29px and "U6STEM" printed as "U6…".
+v2.68 raises the floor to 178px, never lets the name shrink below its own text
+(`min-width:min-content`) and drops the buttons to a second line instead.
+
 `clasp update-deployment <deploymentId> -V 67` puts back **v2.66**, the last version before
 kehadiran became pass/fail in **two colours only** (07 Oct 2026, his request): one
 `PASS_MARK` of 96.72 %, green at or above it and red below, on every attendance figure.
